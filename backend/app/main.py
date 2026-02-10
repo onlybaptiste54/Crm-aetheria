@@ -55,7 +55,7 @@ app.add_middleware(
 )
 
 # Upload directory
-UPLOAD_DIR = Path("/data/uploads")
+UPLOAD_DIR = Path("/app/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
