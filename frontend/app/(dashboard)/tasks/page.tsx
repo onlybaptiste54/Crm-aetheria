@@ -44,12 +44,12 @@ const priorityColors = {
   High: "destructive",
 } as const
 
-function TaskCard({ 
-  task, 
-  onEdit, 
+function TaskCard({
+  task,
+  onEdit,
   onDelete,
-  isDragging = false 
-}: { 
+  isDragging = false
+}: {
   task: Task
   onEdit?: (task: Task) => void
   onDelete?: (id: string) => void
@@ -127,11 +127,11 @@ function TaskCard({
   )
 }
 
-function SortableTask({ 
-  task, 
-  onEdit, 
-  onDelete 
-}: { 
+function SortableTask({
+  task,
+  onEdit,
+  onDelete
+}: {
   task: Task
   onEdit: (task: Task) => void
   onDelete: (id: string) => void
@@ -158,12 +158,12 @@ function SortableTask({
   )
 }
 
-function DroppableColumn({ 
-  column, 
+function DroppableColumn({
+  column,
   tasks,
   onEdit,
   onDelete
-}: { 
+}: {
   column: typeof columns[number]
   tasks: Task[]
   onEdit: (task: Task) => void
@@ -190,9 +190,9 @@ function DroppableColumn({
         <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
           <div className="mt-2 space-y-2 min-h-[500px] rounded-lg p-2 bg-slate-50/50">
             {tasks.map((task) => (
-              <SortableTask 
-                key={task.id} 
-                task={task} 
+              <SortableTask
+                key={task.id}
+                task={task}
                 onEdit={onEdit}
                 onDelete={onDelete}
               />
@@ -208,11 +208,17 @@ export default function TasksPage() {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [editingTask, setEditingTask] = useState<Task | null>(null)
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    title: string
+    description: string
+    status: Task["status"]
+    priority: Task["priority"]
+    tags: string
+  }>({
     title: "",
     description: "",
-    status: "Backlog" as const,
-    priority: "Medium" as const,
+    status: "Backlog",
+    priority: "Medium",
     tags: "",
   })
   const queryClient = useQueryClient()
@@ -282,7 +288,7 @@ export default function TasksPage() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     const tags = formData.tags ? formData.tags.split(",").map(t => t.trim()) : []
-    
+
     if (editingTask) {
       updateMutation.mutate({
         id: editingTask.id,
@@ -322,16 +328,16 @@ export default function TasksPage() {
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event
     setActiveId(null)
-    
+
     if (!over) return
 
     const taskId = active.id as string
     const task = tasks?.find(t => t.id === taskId)
     if (!task) return
-    
+
     // Déterminer la colonne de destination
     let newStatus: Task["status"] | null = null
-    
+
     // Si on drop sur une colonne directement
     const columnId = over.id as string
     if (columns.some(col => col.id === columnId)) {
@@ -472,12 +478,12 @@ export default function TasksPage() {
                 >
                   Annuler
                 </Button>
-                <Button 
-                  type="submit" 
+                <Button
+                  type="submit"
                   disabled={createMutation.isPending || updateMutation.isPending}
                 >
-                  {(createMutation.isPending || updateMutation.isPending) 
-                    ? (editingTask ? "Modification..." : "Création...") 
+                  {(createMutation.isPending || updateMutation.isPending)
+                    ? (editingTask ? "Modification..." : "Création...")
                     : (editingTask ? "Modifier" : "Créer")}
                 </Button>
               </DialogFooter>
@@ -503,7 +509,7 @@ export default function TasksPage() {
             />
           ))}
         </div>
-        
+
         <DragOverlay>
           {activeTask ? <TaskCard task={activeTask} isDragging /> : null}
         </DragOverlay>
