@@ -63,8 +63,15 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 @app.on_event("startup")
 async def startup_event():
     """Create tables on startup (pour dev, en prod utiliser Alembic)."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception as e:
+        # Ignorer l'erreur si les types existent déjà (pb connu avec asyncpg + sqlalchemy enum)
+        if "duplicate key value violates unique constraint" in str(e):
+            print(f"Startup Warning: Database types likely already exist. Ignoring. Details: {e}")
+        else:
+            raise e
 
 
 # ========== ROOT ==========
