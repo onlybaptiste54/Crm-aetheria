@@ -5,17 +5,26 @@ services:
       dockerfile: Dockerfile.prod
     container_name: aetheria_backend_prod
     restart: unless-stopped
-    ports:
-      - "8000:8000"
+    # Ports supprimés pour sécurité -> accès via Traefik uniquement
     env_file:
       - .env.prod
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.crm-backend.rule=Host(`api-crm.agenceaetheria.com`)"
+      - "traefik.http.routers.crm-backend.entrypoints=websecure"
+      - "traefik.http.routers.crm-backend.tls.certresolver=mytlschallenge"
+      - "traefik.http.services.crm-backend.loadbalancer.server.port=8000"
+      # Middlewares de sécurité de base
+      - "traefik.http.routers.crm-backend.middlewares=secure-headers@file" 
     environment:
       DATABASE_URL: postgresql+asyncpg://${CRM_POSTGRES_USER}:${CRM_POSTGRES_PASSWORD}@host.docker.internal:5432/${CRM_POSTGRES_DB}
       SECRET_KEY: ${SECRET_KEY}
       ADMIN_EMAIL: ${ADMIN_EMAIL}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      # IMPORTANT : Backend doit savoir qu'il est derrière un proxy HTTPS
+      FORWARDED_ALLOW_IPS: "*"
     volumes:
       - ./data/uploads:/app/uploads
     healthcheck:
@@ -24,19 +33,38 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    networks:
+      - default
+      - traefik_net
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile.prod
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+        NEXT_PUBLIC_API_URL: https://api-crm.agenceaetheria.com
     container_name: aetheria_frontend_prod
     restart: unless-stopped
-    ports:
-      - "3000:3000"
+    # Ports supprimés -> accès via Traefik uniquement
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.crm-frontend.rule=Host(`crm.agenceaetheria.com`)"
+      - "traefik.http.routers.crm-frontend.entrypoints=websecure"
+      - "traefik.http.routers.crm-frontend.tls.certresolver=mytlschallenge"
+      - "traefik.http.services.crm-frontend.loadbalancer.server.port=3000"
+      # Middlewares
+      - "traefik.http.routers.crm-frontend.middlewares=secure-headers@file"
     environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      NEXT_PUBLIC_API_URL: https://api-crm.agenceaetheria.com
     depends_on:
       backend:
         condition: service_healthy
+    networks:
+      - default
+      - traefik_net
+
+networks:
+  default:
+  traefik_net:
+    external: true
+    name: n8n-stack_default
