@@ -1,9 +1,33 @@
-"""Script simple pour créer l'admin avec le bon email."""
+"""Script simple pour créer l'admin (supprime les users existants, recrée 1 admin depuis .env.prod)."""
 import asyncio
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+
+# .env.prod est à la RACINE du projet (à côté de docker-compose.prod.yml)
+# Chercher dans plusieurs emplacements possibles
+from dotenv import load_dotenv
+
+# Chemins possibles pour .env.prod
+possible_paths = [
+    Path("/app/.env.prod"),  # Si monté par le compose
+    Path(__file__).parent.parent / ".env.prod",  # Racine du projet (parent de backend/)
+    Path(__file__).parent / ".env.prod",  # Dans backend/ (fallback)
+]
+
+env_prod_loaded = False
+for env_path in possible_paths:
+    if env_path.exists():
+        load_dotenv(env_path, override=True)
+        print(f"✅ Loaded .env.prod from {env_path}")
+        env_prod_loaded = True
+        break
+
+if not env_prod_loaded:
+    print(f"⚠️  .env.prod not found, using environment variables")
+    print(f"   Tried: {[str(p) for p in possible_paths]}")
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -13,9 +37,9 @@ from app.auth import get_password_hash
 
 
 async def create_admin():
-    """Crée l'utilisateur admin@aetheria.com."""
-    admin_email = "admin@aetheria.com"
-    admin_password = "admin123"
+    """Supprime tous les users puis crée l'admin depuis ADMIN_EMAIL et ADMIN_PASSWORD (.env.prod)."""
+    admin_email = os.getenv("ADMIN_EMAIL", "admin@aetheria.com")
+    admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
     
     print(f"Creating admin user: {admin_email}")
     
