@@ -10,7 +10,7 @@ from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, extract
+from sqlalchemy import select, text
 
 from .database import get_db, engine, Base
 from .auth import (
@@ -19,7 +19,7 @@ from .auth import (
     get_current_active_user,
     ACCESS_TOKEN_EXPIRE_MINUTES,
 )
-from .models import User, Client, Task, Finance, MeetingNote, FinanceType, TaskStatus, ClientStatus
+from .models import User, Client, Task, Finance, MeetingNote
 from .schemas import (
     Token,
     UserOut,
@@ -37,6 +37,7 @@ from .schemas import (
     MeetingNoteOut,
     DashboardStats,
 )
+from .services.dashboard_stats import build_dashboard_stats
 
 # ========== APP CONFIG ==========
 app = FastAPI(
@@ -59,6 +60,17 @@ UPLOAD_DIR = Path("/app/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
+# Runtime schema patching for environments that do not run migrations.
+async def apply_runtime_migrations() -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS estimated_hours NUMERIC(10,2)")
+        )
+        await conn.execute(
+            text("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS actual_hours NUMERIC(10,2)")
+        )
+
+
 # ========== STARTUP EVENT ==========
 @app.on_event("startup")
 async def startup_event():
@@ -66,6 +78,7 @@ async def startup_event():
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+        await apply_runtime_migrations()
     except Exception as e:
         # Ignorer l'erreur si les types existent déjà (pb connu avec asyncpg + sqlalchemy enum)
         if "duplicate key value violates unique constraint" in str(e):
@@ -461,49 +474,4 @@ async def get_dashboard_stats(
     current_user: User = Depends(get_current_active_user)
 ):
     """Retourne les statistiques pour le dashboard."""
-    # Total MRR (Subscriptions seulement)
-    mrr_result = await db.execute(
-        select(func.sum(Finance.amount)).where(Finance.type == FinanceType.SUBSCRIPTION)
-    )
-    total_mrr = mrr_result.scalar() or 0.0
-    
-    # Total expenses this month
-    current_month = datetime.now().month
-    current_year = datetime.now().year
-    expenses_result = await db.execute(
-        select(func.sum(Finance.amount)).where(
-            extract('month', Finance.billing_date) == current_month,
-            extract('year', Finance.billing_date) == current_year
-        )
-    )
-    total_expenses_this_month = expenses_result.scalar() or 0.0
-    
-    # Active clients count
-    clients_result = await db.execute(
-        select(func.count(Client.id)).where(Client.status == ClientStatus.CLIENT)
-    )
-    active_clients_count = clients_result.scalar() or 0
-    
-    # Pending tasks count (pas Done)
-    tasks_result = await db.execute(
-        select(func.count(Task.id)).where(Task.status != TaskStatus.DONE)
-    )
-    pending_tasks_count = tasks_result.scalar() or 0
-    
-    # Tasks due today
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = datetime.now().replace(hour=23, minute=59, second=59, microsecond=999999)
-    tasks_due_today_result = await db.execute(
-        select(func.count(Task.id)).where(
-            Task.due_date.between(today_start, today_end)
-        )
-    )
-    tasks_due_today = tasks_due_today_result.scalar() or 0
-    
-    return DashboardStats(
-        total_mrr=float(total_mrr),
-        total_expenses_this_month=float(total_expenses_this_month),
-        active_clients_count=active_clients_count,
-        pending_tasks_count=pending_tasks_count,
-        tasks_due_today=tasks_due_today
-    )
+    return await build_dashboard_stats(db)

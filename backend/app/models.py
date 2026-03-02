@@ -103,6 +103,8 @@ class Task(Base):
     status: Mapped[TaskStatus] = mapped_column(SQLEnum(TaskStatus), default=TaskStatus.BACKLOG)
     priority: Mapped[Priority] = mapped_column(SQLEnum(Priority), default=Priority.MEDIUM)
     due_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    estimated_hours: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
+    actual_hours: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     tags: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     

@@ -81,6 +81,8 @@ class TaskBase(BaseModel):
     status: TaskStatus = TaskStatus.BACKLOG
     priority: Priority = Priority.MEDIUM
     due_date: Optional[datetime] = None
+    estimated_hours: Optional[float] = None
+    actual_hours: Optional[float] = None
     tags: Optional[list[str]] = None
     client_id: Optional[UUID] = None
 
@@ -95,6 +97,8 @@ class TaskUpdate(BaseModel):
     status: Optional[TaskStatus] = None
     priority: Optional[Priority] = None
     due_date: Optional[datetime] = None
+    estimated_hours: Optional[float] = None
+    actual_hours: Optional[float] = None
     tags: Optional[list[str]] = None
     client_id: Optional[UUID] = None
 
@@ -172,6 +176,7 @@ class MeetingNoteOut(MeetingNoteBase):
 # ========== STATS SCHEMA ==========
 class DashboardStats(BaseModel):
     total_mrr: float
+    total_recurring_expenses_monthly: float
     total_expenses_this_month: float
     active_clients_count: int
     pending_tasks_count: int

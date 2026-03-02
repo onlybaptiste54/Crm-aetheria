@@ -53,6 +53,7 @@ export default function ClientsPage() {
     pipeline_stage: "New" as const,
     priority: "Medium" as const,
     company_size: "TPE" as const,
+    next_action_date: "",
     notes: "",
   })
   const queryClient = useQueryClient()
@@ -66,7 +67,7 @@ export default function ClientsPage() {
   const clients = allClients?.filter((c) => c.status === "Prospect") || []
 
   const createMutation = useMutation({
-    mutationFn: (data: typeof formData) => clientsApi.create(data),
+    mutationFn: (data: Partial<Client>) => clientsApi.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["clients"] })
       setIsDialogOpen(false)
@@ -80,6 +81,7 @@ export default function ClientsPage() {
         pipeline_stage: "New",
         priority: "Medium",
         company_size: "TPE",
+        next_action_date: "",
         notes: "",
       })
     },
@@ -94,7 +96,12 @@ export default function ClientsPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    createMutation.mutate(formData)
+    createMutation.mutate({
+      ...formData,
+      next_action_date: formData.next_action_date
+        ? `${formData.next_action_date}T09:00:00`
+        : undefined,
+    })
   }
 
   const filteredClients = clients?.filter((client) => {
@@ -275,6 +282,18 @@ export default function ClientsPage() {
               </div>
 
               <div className="space-y-2">
+                <Label htmlFor="next_action_date">Prochaine action</Label>
+                <Input
+                  id="next_action_date"
+                  type="date"
+                  value={formData.next_action_date}
+                  onChange={(e) =>
+                    setFormData({ ...formData, next_action_date: e.target.value })
+                  }
+                />
+              </div>
+
+              <div className="space-y-2">
                 <Label htmlFor="notes">Notes</Label>
                 <Textarea
                   id="notes"
@@ -423,3 +442,4 @@ export default function ClientsPage() {
     </div>
   )
 }
+

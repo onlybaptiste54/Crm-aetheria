@@ -61,7 +61,9 @@ export interface Task {
   description?: string
   status: "Backlog" | "Todo" | "In Progress" | "Validation" | "Done"
   priority: "Low" | "Medium" | "High"
-  due_date?: string
+  due_date?: string | null
+  estimated_hours?: number | null
+  actual_hours?: number | null
   tags?: string[]
   client_id?: string
   created_at: string
@@ -92,6 +94,7 @@ export interface MeetingNote {
 
 export interface DashboardStats {
   total_mrr: number
+  total_recurring_expenses_monthly: number
   total_expenses_this_month: number
   active_clients_count: number
   pending_tasks_count: number
