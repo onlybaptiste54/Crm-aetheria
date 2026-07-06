@@ -6,10 +6,10 @@ from uuid import UUID
 from pathlib import Path
 from typing import List
 
-from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Query
+from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Query, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
@@ -69,6 +69,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Kill-switch écritures pour l'assistant (auth par X-API-Key).
+# Par défaut désactivé : l'assistant démarre en LECTURE SEULE.
+# Ne bloque que les requêtes authentifiées par clé API (le bot), jamais l'app web (JWT).
+ASSISTANT_WRITE_ENABLED = os.getenv("ASSISTANT_WRITE_ENABLED", "false").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+
+
+@app.middleware("http")
+async def assistant_write_guard(request: Request, call_next):
+    if (
+        request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        and request.headers.get("X-API-Key")
+        and not ASSISTANT_WRITE_ENABLED
+    ):
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={
+                "detail": "Écriture désactivée pour l'assistant. "
+                "Passez ASSISTANT_WRITE_ENABLED=true côté serveur pour l'autoriser."
+            },
+        )
+    return await call_next(request)
+
 
 # Upload directory
 UPLOAD_DIR = Path("/app/uploads")
