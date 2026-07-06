@@ -39,7 +39,7 @@ Les **descriptions de catégories** sont ce que lit le modèle : elles font tout
 | `brief_du_jour` | L'utilisateur demande le point du jour, ses urgences, son programme, ses RDV du jour, "quoi de neuf", "fais le point". |
 | `taches` | Créer, modifier, lister, terminer ou reporter des tâches ; questions d'échéances ou de kanban. Ex : "crée une tâche", "c'est quoi mes tâches en retard", "passe X en terminé". |
 | `crm_clients` | Clients et prospects : lister, créer, mettre à jour, pipeline, prochaine action/RDV d'un client, ajouter une info/note sur un client. Ex : "ajoute le prospect X", "où en est le client Y", "note que Z préfère le mardi". |
-| `emails` | Boîte mail : chercher, lire, résumer des emails ; rédiger un brouillon. Ex : "j'ai reçu quoi de X", "résume les mails d'aujourd'hui". |
+| `emails` | Boîte mail : chercher, lire, résumer des emails ; rédiger un brouillon ou envoyer un email. Ex : "j'ai reçu quoi de X", "résume les mails d'aujourd'hui", "écris un mail à Y pour...", "réponds-lui que...". |
 | `autre` | Tout le reste : discussion générale, questions hors CRM/emails. (Catégorie fallback.) |
 
 Réglage : une seule catégorie par message (v1). Si un message mélange deux
@@ -110,15 +110,31 @@ Une action à faire → propose plutôt une tâche (branche tâches).
 ### Branche `emails` — Agent Emails
 Prompt spécifique :
 ```
-Ton domaine : la boîte Gmail de Baptiste.
+Ton domaine : la boîte Gmail de Baptiste (lecture, rédaction, envoi).
 Croise avec le CRM : expéditeur connu → dis de quel client il s'agit et où
-il en est (find_clients). Tu ne rédiges un email QUE sur demande explicite,
-et tu montres le brouillon avant tout envoi.
+il en est (find_clients).
+
+Rédaction d'emails :
+- Par défaut tu crées un BROUILLON (gmail_create_draft), jamais un envoi.
+- Tu n'envoies directement (gmail_send) QUE si Baptiste dit explicitement
+  "envoie" / "envoie-le direct". Avant l'envoi : montre le mail complet
+  (destinataire, objet, corps) et attends un "oui". Une confirmation = un envoi.
+- Ne devine JAMAIS une adresse : prends-la dans le CRM (find_clients) ou dans
+  le fil d'emails. Adresse introuvable → demande-la.
+- Style des mails : professionnel, direct, signé "Baptiste — Aetheria".
+  Adapte le ton au contexte du fil. Pas de blabla corporate.
+- Réponse à un fil existant → reste dans le fil (reply), n'ouvre pas un
+  nouveau thread.
 ```
-| Outil | Type | Description |
+| Outil | Type | Description n8n |
 |---|---|---|
-| Gmail Tool | nœud Gmail n8n (OAuth `agenceaetheria@gmail.com`) | Recherche/lecture d'emails. |
-| `find_clients` | GET `/clients` | Croiser un expéditeur avec le CRM. |
+| `gmail_search` | nœud Gmail Tool — opération "Get Many" | Chercher et lire des emails (par expéditeur, sujet, date, mots-clés). |
+| `gmail_create_draft` | nœud Gmail Tool — opération "Create Draft" | Créer un brouillon (to, subject, message). Action par défaut pour toute rédaction. |
+| `gmail_send` | nœud Gmail Tool — opération "Send" | Envoyer un email. UNIQUEMENT sur demande explicite et après confirmation du mail complet. |
+| `find_clients` | GET `/clients` | Croiser un expéditeur/destinataire avec le CRM (récupérer l'adresse email d'un client). |
+
+OAuth : compte `agenceaetheria@gmail.com`, credential Gmail unique partagé
+par les trois nœuds Gmail Tool.
 
 ### Branche `autre` — Agent Général
 Socle commun seul, sans outil (ou `get_today` en lecture si utile).
