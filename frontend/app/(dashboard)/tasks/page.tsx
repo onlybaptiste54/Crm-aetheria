@@ -19,11 +19,11 @@ import {
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { tasksApi, type Task } from "@/lib/api"
+import { clientsApi, tasksApi, type Task } from "@/lib/api"
 import { cn, formatDate } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -44,6 +44,7 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import {
+  Building2,
   Calendar,
   ChevronDown,
   Clock3,
@@ -53,11 +54,11 @@ import {
 } from "lucide-react"
 
 const columns = [
-  { id: "Backlog", title: "Backlog", color: "bg-slate-100" },
-  { id: "Todo", title: "A faire", color: "bg-blue-50" },
-  { id: "In Progress", title: "En cours", color: "bg-amber-50" },
-  { id: "Validation", title: "Validation", color: "bg-indigo-50" },
-  { id: "Done", title: "Termine", color: "bg-emerald-50" },
+  { id: "Backlog", title: "Backlog", color: "bg-slate-400" },
+  { id: "Todo", title: "À faire", color: "bg-blue-500" },
+  { id: "In Progress", title: "En cours", color: "bg-amber-500" },
+  { id: "Validation", title: "Validation", color: "bg-indigo-500" },
+  { id: "Done", title: "Terminé", color: "bg-emerald-500" },
 ] as const
 
 const priorityColors = {
@@ -77,6 +78,7 @@ type TaskFormData = {
   description: string
   status: Task["status"]
   priority: Task["priority"]
+  client_id: string
   due_date: string
   estimated_hours: string
   actual_hours: string
@@ -88,11 +90,14 @@ const defaultFormData: TaskFormData = {
   description: "",
   status: "Backlog",
   priority: "Medium",
+  client_id: "",
   due_date: "",
   estimated_hours: "",
   actual_hours: "",
   tags: "",
 }
+
+const NO_CLIENT = "__none__"
 
 function parseOptionalNumber(value: string): number | null {
   const trimmed = value.trim()
@@ -103,6 +108,7 @@ function parseOptionalNumber(value: string): number | null {
 
 function TaskCard({
   task,
+  clientName,
   isExpanded,
   onToggleExpand,
   onEdit,
@@ -110,6 +116,7 @@ function TaskCard({
   isDragging = false,
 }: {
   task: Task
+  clientName?: string
   isExpanded: boolean
   onToggleExpand: (taskId: string) => void
   onEdit?: (task: Task) => void
@@ -181,6 +188,13 @@ function TaskCard({
           </div>
         ) : null}
 
+        {clientName ? (
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Building2 className="h-3.5 w-3.5" />
+            <span className="truncate">{clientName}</span>
+          </div>
+        ) : null}
+
         {task.tags && task.tags.length > 0 ? (
           <div className="flex flex-wrap gap-1">
             {(isExpanded ? task.tags : task.tags.slice(0, 3)).map((tag) => (
@@ -229,12 +243,14 @@ function TaskCard({
 
 function SortableTask({
   task,
+  clientName,
   isExpanded,
   onToggleExpand,
   onEdit,
   onDelete,
 }: {
   task: Task
+  clientName?: string
   isExpanded: boolean
   onToggleExpand: (taskId: string) => void
   onEdit: (task: Task) => void
@@ -254,6 +270,7 @@ function SortableTask({
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
       <TaskCard
         task={task}
+        clientName={clientName}
         isExpanded={isExpanded}
         onToggleExpand={onToggleExpand}
         onEdit={onEdit}
@@ -266,6 +283,7 @@ function SortableTask({
 function DroppableColumn({
   column,
   tasks,
+  clientNames,
   expandedTaskIds,
   onToggleExpand,
   onEdit,
@@ -273,6 +291,7 @@ function DroppableColumn({
 }: {
   column: (typeof columns)[number]
   tasks: Task[]
+  clientNames: Record<string, string>
   expandedTaskIds: Record<string, boolean>
   onToggleExpand: (taskId: string) => void
   onEdit: (task: Task) => void
@@ -284,22 +303,24 @@ function DroppableColumn({
 
   return (
     <div className="flex min-w-[240px] flex-col">
-      <Card className={cn(column.color, "border-dashed")}>
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center justify-between text-sm">
-            <span>{column.title}</span>
-            <Badge variant="secondary">{tasks.length}</Badge>
-          </CardTitle>
-        </CardHeader>
-      </Card>
+      <div className="mb-2 flex items-center justify-between px-1">
+        <div className="flex items-center gap-2">
+          <span className={cn("h-2 w-2 rounded-full", column.color)} />
+          <span className="text-sm font-semibold">{column.title}</span>
+        </div>
+        <Badge variant="secondary" className="tabular-nums">
+          {tasks.length}
+        </Badge>
+      </div>
 
       <div ref={setNodeRef}>
         <SortableContext items={tasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
-          <div className="mt-2 min-h-[420px] space-y-2 rounded-lg bg-slate-50/60 p-2">
+          <div className="min-h-[440px] space-y-2 rounded-xl bg-muted/40 p-2">
             {tasks.map((task) => (
               <SortableTask
                 key={task.id}
                 task={task}
+                clientName={task.client_id ? clientNames[task.client_id] : undefined}
                 isExpanded={Boolean(expandedTaskIds[task.id])}
                 onToggleExpand={onToggleExpand}
                 onEdit={onEdit}
@@ -326,6 +347,16 @@ export default function TasksPage() {
     queryKey: ["tasks"],
     queryFn: () => tasksApi.getAll(),
   })
+
+  const { data: clients } = useQuery({
+    queryKey: ["clients"],
+    queryFn: () => clientsApi.getAll(),
+  })
+
+  const clientNames = (clients ?? []).reduce<Record<string, string>>((acc, client) => {
+    acc[client.id] = client.company_name
+    return acc
+  }, {})
 
   const createMutation = useMutation({
     mutationFn: (data: Partial<Task>) => tasksApi.create(data),
@@ -364,6 +395,7 @@ export default function TasksPage() {
       description: task.description || "",
       status: task.status,
       priority: task.priority,
+      client_id: task.client_id ?? "",
       due_date: task.due_date ? String(task.due_date).slice(0, 10) : "",
       estimated_hours:
         task.estimated_hours === null || task.estimated_hours === undefined
@@ -399,6 +431,7 @@ export default function TasksPage() {
       description: formData.description.trim() || undefined,
       status: formData.status,
       priority: formData.priority,
+      client_id: formData.client_id || undefined,
       due_date: formData.due_date ? `${formData.due_date}T09:00:00` : undefined,
       estimated_hours: parseOptionalNumber(formData.estimated_hours),
       actual_hours: parseOptionalNumber(formData.actual_hours),
@@ -407,6 +440,10 @@ export default function TasksPage() {
 
     if (!payload.due_date && editingTask?.due_date) {
       payload.due_date = null
+    }
+
+    if (!formData.client_id && editingTask?.client_id) {
+      payload.client_id = null
     }
 
     if (editingTask) {
@@ -479,9 +516,9 @@ export default function TasksPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-bold">Tasks - Kanban</h1>
-          <p className="text-muted-foreground">
-            Cliquez sur une carte pour la developper. Glissez-deposez pour changer de colonne.
+          <h1 className="text-2xl font-semibold tracking-tight">Tasks — Kanban</h1>
+          <p className="text-sm text-muted-foreground">
+            Cliquez sur une carte pour la développer. Glissez-déposez pour changer de colonne.
           </p>
         </div>
 
@@ -561,6 +598,31 @@ export default function TasksPage() {
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="client">Client lié</Label>
+                <Select
+                  value={formData.client_id || NO_CLIENT}
+                  onValueChange={(value) =>
+                    setFormData((prev) => ({
+                      ...prev,
+                      client_id: value === NO_CLIENT ? "" : value,
+                    }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Aucun client" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_CLIENT}>Aucun client</SelectItem>
+                    {(clients ?? []).map((client) => (
+                      <SelectItem key={client.id} value={client.id}>
+                        {client.company_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="space-y-2">
@@ -645,6 +707,7 @@ export default function TasksPage() {
                 key={column.id}
                 column={column}
                 tasks={getTasksByColumn(column.id)}
+                clientNames={clientNames}
                 expandedTaskIds={expandedTaskIds}
                 onToggleExpand={toggleTaskExpansion}
                 onEdit={handleEdit}
@@ -658,6 +721,7 @@ export default function TasksPage() {
           {activeTask ? (
             <TaskCard
               task={activeTask}
+              clientName={activeTask.client_id ? clientNames[activeTask.client_id] : undefined}
               isExpanded={false}
               onToggleExpand={() => undefined}
               isDragging

@@ -29,7 +29,7 @@ services:
       - "${BACKEND_PORT}:8000"
     volumes:
       - ./backend/app:/app/app:ro
-      - uploads_data:/data/uploads
+      - uploads_data:/app/uploads
     depends_on:
       - db
     networks:

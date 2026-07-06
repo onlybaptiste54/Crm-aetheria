@@ -35,7 +35,7 @@ export default function MeetingNotesPage() {
     title: "",
     content: "",
     client_id: "",
-    meeting_date: new Date().toISOString().split("T")[0],
+    date: new Date().toISOString().split("T")[0],
   })
   const queryClient = useQueryClient()
 
@@ -58,7 +58,7 @@ export default function MeetingNotesPage() {
         title: "",
         content: "",
         client_id: "",
-        meeting_date: new Date().toISOString().split("T")[0],
+        date: new Date().toISOString().split("T")[0],
       })
     },
   })
@@ -72,7 +72,16 @@ export default function MeetingNotesPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    createMutation.mutate(formData)
+    if (!formData.client_id) {
+      alert("Veuillez sélectionner un client.")
+      return
+    }
+    createMutation.mutate({
+      title: formData.title,
+      content: formData.content || undefined,
+      client_id: formData.client_id,
+      date: `${formData.date}T09:00:00`,
+    })
   }
 
   const getClientName = (clientId: string) => {
@@ -95,8 +104,8 @@ export default function MeetingNotesPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Comptes-Rendus</h1>
-          <p className="text-muted-foreground">
+          <h1 className="text-2xl font-semibold tracking-tight">Comptes-Rendus</h1>
+          <p className="text-sm text-muted-foreground">
             Notes de réunions et entretiens clients
           </p>
         </div>
@@ -153,9 +162,9 @@ export default function MeetingNotesPage() {
                   <Input
                     id="meeting_date"
                     type="date"
-                    value={formData.meeting_date}
+                    value={formData.date}
                     onChange={(e) =>
-                      setFormData({ ...formData, meeting_date: e.target.value })
+                      setFormData({ ...formData, date: e.target.value })
                     }
                   />
                 </div>

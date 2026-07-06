@@ -1,5 +1,6 @@
 """Authentication logic - JWT simple."""
 import os
+import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
@@ -13,7 +14,22 @@ from .models import User
 from .schemas import TokenData
 
 # Config
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-this-in-production-min-32-chars")
+# Sécurité : on refuse toute valeur par défaut connue. Si SECRET_KEY n'est pas
+# fournie (ou reprend l'ancienne valeur d'exemple), on génère une clé aléatoire
+# éphémère -> les tokens ne peuvent pas être forgés, mais ils sont invalidés à
+# chaque redémarrage. En production, DÉFINISSEZ SECRET_KEY pour des sessions stables.
+_INSECURE_DEFAULTS = {
+    "",
+    "your-secret-key-change-this-in-production-min-32-chars",
+}
+SECRET_KEY = os.getenv("SECRET_KEY", "").strip()
+if SECRET_KEY in _INSECURE_DEFAULTS:
+    SECRET_KEY = secrets.token_urlsafe(48)
+    print(
+        "⚠️  SECRET_KEY non défini (ou valeur d'exemple) : génération d'une clé "
+        "aléatoire éphémère. Définissez SECRET_KEY dans l'environnement pour "
+        "garder les sessions valides après un redémarrage."
+    )
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "10080"))
 

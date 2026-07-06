@@ -109,9 +109,9 @@ export default function FinancesPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-bold">Finances</h1>
-          <p className="text-muted-foreground">
-            Suivi des depenses. Les abonnements sont comptes chaque mois comme depense recurrente.
+          <h1 className="text-2xl font-semibold tracking-tight">Finances</h1>
+          <p className="text-sm text-muted-foreground">
+            Suivi des dépenses. Les abonnements sont comptés chaque mois comme dépense récurrente.
           </p>
         </div>
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
@@ -396,9 +396,13 @@ export default function FinancesPage() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            onClick={() => deleteMutation.mutate(finance.id)}
+                            onClick={() => {
+                              if (confirm("Supprimer cette dépense ?")) {
+                                deleteMutation.mutate(finance.id)
+                              }
+                            }}
                           >
-                            <Trash2 className="h-4 w-4 text-red-500" />
+                            <Trash2 className="h-4 w-4 text-destructive" />
                           </Button>
                         </div>
                       </td>

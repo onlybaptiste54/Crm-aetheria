@@ -25,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { ClientDetailSheet } from "@/components/client-detail-sheet"
 import { formatDate } from "@/lib/utils"
 import { Plus, Pencil, Trash2, Search } from "lucide-react"
 
@@ -40,22 +41,26 @@ const priorityColors = {
   High: "destructive",
 } as const
 
+const defaultForm = {
+  company_name: "",
+  contact_person: "",
+  email: "",
+  phone: "",
+  sector: "",
+  status: "Client" as Client["status"],
+  pipeline_stage: "Dev" as Client["pipeline_stage"],
+  priority: "Medium" as Client["priority"],
+  company_size: "TPE" as NonNullable<Client["company_size"]>,
+  next_action_date: "",
+  notes: "",
+}
+
 export default function SuiviClientPage() {
   const [searchQuery, setSearchQuery] = useState("")
   const [isDialogOpen, setIsDialogOpen] = useState(false)
-  const [formData, setFormData] = useState({
-    company_name: "",
-    contact_person: "",
-    email: "",
-    phone: "",
-    sector: "",
-    status: "Client" as const, // Par défaut "Client"
-    pipeline_stage: "Dev" as const,
-    priority: "Medium" as const,
-    company_size: "TPE" as const,
-    next_action_date: "",
-    notes: "",
-  })
+  const [editingClient, setEditingClient] = useState<Client | null>(null)
+  const [selectedClient, setSelectedClient] = useState<Client | null>(null)
+  const [formData, setFormData] = useState(defaultForm)
   const queryClient = useQueryClient()
 
   const { data: allClients, isLoading } = useQuery({
@@ -70,20 +75,16 @@ export default function SuiviClientPage() {
     mutationFn: (data: Partial<Client>) => clientsApi.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["clients"] })
-      setIsDialogOpen(false)
-      setFormData({
-        company_name: "",
-        contact_person: "",
-        email: "",
-        phone: "",
-        sector: "",
-        status: "Client",
-        pipeline_stage: "Dev",
-        priority: "Medium",
-        company_size: "TPE",
-        next_action_date: "",
-        notes: "",
-      })
+      handleDialogClose(false)
+    },
+  })
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Partial<Client> }) =>
+      clientsApi.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["clients"] })
+      handleDialogClose(false)
     },
   })
 
@@ -94,14 +95,53 @@ export default function SuiviClientPage() {
     },
   })
 
+  const handleEdit = (client: Client) => {
+    setEditingClient(client)
+    setFormData({
+      company_name: client.company_name,
+      contact_person: client.contact_person ?? "",
+      email: client.email ?? "",
+      phone: client.phone ?? "",
+      sector: client.sector ?? "",
+      status: client.status,
+      pipeline_stage: client.pipeline_stage,
+      priority: client.priority,
+      company_size: client.company_size ?? "TPE",
+      next_action_date: client.next_action_date
+        ? String(client.next_action_date).slice(0, 10)
+        : "",
+      notes: client.notes ?? "",
+    })
+    setIsDialogOpen(true)
+  }
+
+  const handleDelete = (id: string) => {
+    if (confirm("Supprimer ce client ?")) {
+      deleteMutation.mutate(id)
+    }
+  }
+
+  const handleDialogClose = (open: boolean) => {
+    if (!open) {
+      setEditingClient(null)
+      setFormData(defaultForm)
+    }
+    setIsDialogOpen(open)
+  }
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    createMutation.mutate({
+    const payload: Partial<Client> = {
       ...formData,
       next_action_date: formData.next_action_date
         ? `${formData.next_action_date}T09:00:00`
         : undefined,
-    })
+    }
+    if (editingClient) {
+      updateMutation.mutate({ id: editingClient.id, data: payload })
+    } else {
+      createMutation.mutate(payload)
+    }
   }
 
   const filteredClients = clients?.filter((client) => {
@@ -121,23 +161,25 @@ export default function SuiviClientPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Suivi Client</h1>
-          <p className="text-muted-foreground">
+          <h1 className="text-2xl font-semibold tracking-tight">Suivi Client</h1>
+          <p className="text-sm text-muted-foreground">
             Gérez vos clients actifs et leurs projets
           </p>
         </div>
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <Dialog open={isDialogOpen} onOpenChange={handleDialogClose}>
           <DialogTrigger asChild>
             <Button>
               <Plus className="mr-2 h-4 w-4" />
-              Nouveau Client
+              Nouveau client
             </Button>
           </DialogTrigger>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Nouveau Client</DialogTitle>
+              <DialogTitle>{editingClient ? "Modifier le client" : "Nouveau client"}</DialogTitle>
               <DialogDescription>
-                Ajoutez un nouveau client actif à votre portefeuille
+                {editingClient
+                  ? "Mettez à jour les informations du client."
+                  : "Ajoutez un nouveau client actif à votre portefeuille."}
               </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -309,12 +351,19 @@ export default function SuiviClientPage() {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => setIsDialogOpen(false)}
+                  onClick={() => handleDialogClose(false)}
                 >
                   Annuler
                 </Button>
-                <Button type="submit" disabled={createMutation.isPending}>
-                  {createMutation.isPending ? "Création..." : "Créer"}
+                <Button
+                  type="submit"
+                  disabled={createMutation.isPending || updateMutation.isPending}
+                >
+                  {createMutation.isPending || updateMutation.isPending
+                    ? "Enregistrement..."
+                    : editingClient
+                      ? "Enregistrer"
+                      : "Créer"}
                 </Button>
               </DialogFooter>
             </form>
@@ -373,7 +422,11 @@ export default function SuiviClientPage() {
                   </tr>
                 ) : (
                   filteredClients.map((client) => (
-                    <tr key={client.id} className="border-b last:border-0 hover:bg-slate-50">
+                    <tr
+                      key={client.id}
+                      className="cursor-pointer border-b last:border-0 hover:bg-slate-50"
+                      onClick={() => setSelectedClient(client)}
+                    >
                       <td className="px-4 py-3">
                         <div>
                           <p className="font-medium">{client.company_name}</p>
@@ -415,16 +468,19 @@ export default function SuiviClientPage() {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <Button variant="ghost" size="icon">
+                        <div
+                          className="flex items-center gap-1"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <Button variant="ghost" size="icon" onClick={() => handleEdit(client)}>
                             <Pencil className="h-4 w-4" />
                           </Button>
                           <Button
                             variant="ghost"
                             size="icon"
-                            onClick={() => deleteMutation.mutate(client.id)}
+                            onClick={() => handleDelete(client.id)}
                           >
-                            <Trash2 className="h-4 w-4 text-red-500" />
+                            <Trash2 className="h-4 w-4 text-destructive" />
                           </Button>
                         </div>
                       </td>
@@ -439,6 +495,17 @@ export default function SuiviClientPage() {
           </div>
         </CardContent>
       </Card>
+
+      <ClientDetailSheet
+        client={selectedClient}
+        onOpenChange={(open) => {
+          if (!open) setSelectedClient(null)
+        }}
+        onEdit={(client) => {
+          setSelectedClient(null)
+          handleEdit(client)
+        }}
+      />
     </div>
   )
 }

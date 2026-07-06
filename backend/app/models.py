@@ -1,7 +1,7 @@
 """SQLAlchemy Models - Tous les modèles regroupés ici."""
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Text, DateTime, Boolean, Enum as SQLEnum, Numeric, Date, ARRAY, ForeignKey
+from sqlalchemy import String, Text, DateTime, Boolean, Enum as SQLEnum, Numeric, Date, ARRAY, ForeignKey, BigInteger
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
@@ -57,6 +57,13 @@ class FinanceCategory(str, enum.Enum):
     OFFICE = "Office"
 
 
+class ProjectStatus(str, enum.Enum):
+    ACTIVE = "Active"
+    ON_HOLD = "On Hold"
+    DONE = "Done"
+    ARCHIVED = "Archived"
+
+
 # ========== MODELS ==========
 class User(Base):
     """Table User pour l'authentification."""
@@ -91,6 +98,7 @@ class Client(Base):
     # Relations
     tasks = relationship("Task", back_populates="client", cascade="all, delete-orphan")
     meeting_notes = relationship("MeetingNote", back_populates="client", cascade="all, delete-orphan")
+    projects = relationship("Project", back_populates="client", cascade="all, delete-orphan")
 
 
 class Task(Base):
@@ -144,6 +152,42 @@ class MeetingNote(Base):
     
     # FK
     client_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False)
-    
+
     # Relations
     client = relationship("Client", back_populates="meeting_notes")
+
+
+class Project(Base):
+    """Table Projects - Un client peut avoir plusieurs projets."""
+    __tablename__ = "projects"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[ProjectStatus] = mapped_column(SQLEnum(ProjectStatus), default=ProjectStatus.ACTIVE)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # FK
+    client_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False)
+
+    # Relations
+    client = relationship("Client", back_populates="projects")
+    documents = relationship("Document", back_populates="project", cascade="all, delete-orphan")
+
+
+class Document(Base):
+    """Table Documents - Fichiers rangés par projet."""
+    __tablename__ = "documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(500), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(1000), nullable=False)
+    file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # FK
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+
+    # Relations
+    project = relationship("Project", back_populates="documents")

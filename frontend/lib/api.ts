@@ -65,7 +65,7 @@ export interface Task {
   estimated_hours?: number | null
   actual_hours?: number | null
   tags?: string[]
-  client_id?: string
+  client_id?: string | null
   created_at: string
 }
 
@@ -80,6 +80,25 @@ export interface Finance {
   renewal_date?: string
   is_paid: boolean
   invoice_path?: string
+  created_at: string
+}
+
+export interface Project {
+  id: string
+  name: string
+  description?: string | null
+  status: "Active" | "On Hold" | "Done" | "Archived"
+  client_id: string
+  created_at: string
+}
+
+export interface Document {
+  id: string
+  name: string
+  file_path: string
+  file_size?: number | null
+  content_type?: string | null
+  project_id: string
   created_at: string
 }
 
@@ -235,6 +254,65 @@ export const meetingNotesApi = {
   
   delete: async (id: string): Promise<void> => {
     await api.delete(`/meeting-notes/${id}`)
+  },
+}
+
+// Projects API
+export const projectsApi = {
+  getAll: async (clientId?: string): Promise<Project[]> => {
+    const response = await api.get("/projects", {
+      params: clientId ? { client_id: clientId } : undefined,
+    })
+    return response.data
+  },
+
+  create: async (data: Partial<Project>): Promise<Project> => {
+    const response = await api.post("/projects", data)
+    return response.data
+  },
+
+  update: async (id: string, data: Partial<Project>): Promise<Project> => {
+    const response = await api.put(`/projects/${id}`, data)
+    return response.data
+  },
+
+  delete: async (id: string): Promise<void> => {
+    await api.delete(`/projects/${id}`)
+  },
+}
+
+// Documents API
+export const documentsApi = {
+  listByProject: async (projectId: string): Promise<Document[]> => {
+    const response = await api.get(`/projects/${projectId}/documents`)
+    return response.data
+  },
+
+  upload: async (projectId: string, file: File): Promise<Document> => {
+    const formData = new FormData()
+    formData.append("file", file)
+    const response = await api.post(`/projects/${projectId}/documents`, formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    })
+    return response.data
+  },
+
+  download: async (doc: Document): Promise<void> => {
+    const response = await api.get(`/documents/${doc.id}/download`, {
+      responseType: "blob",
+    })
+    const url = window.URL.createObjectURL(new Blob([response.data]))
+    const link = document.createElement("a")
+    link.href = url
+    link.download = doc.name
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.URL.revokeObjectURL(url)
+  },
+
+  delete: async (id: string): Promise<void> => {
+    await api.delete(`/documents/${id}`)
   },
 }
 

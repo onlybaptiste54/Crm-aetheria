@@ -3,7 +3,7 @@ from pydantic import BaseModel, EmailStr, ConfigDict
 from datetime import datetime, date
 from uuid import UUID
 from typing import Optional
-from .models import ClientStatus, PipelineStage, Priority, CompanySize, TaskStatus, FinanceType, FinanceCategory
+from .models import ClientStatus, PipelineStage, Priority, CompanySize, TaskStatus, FinanceType, FinanceCategory, ProjectStatus
 
 
 # ========== USER SCHEMAS ==========
@@ -170,6 +170,45 @@ class MeetingNoteUpdate(BaseModel):
 class MeetingNoteOut(MeetingNoteBase):
     id: UUID
     
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ========== PROJECT SCHEMAS ==========
+class ProjectBase(BaseModel):
+    name: str
+    description: Optional[str] = None
+    status: ProjectStatus = ProjectStatus.ACTIVE
+    client_id: UUID
+
+
+class ProjectCreate(ProjectBase):
+    pass
+
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[ProjectStatus] = None
+    client_id: Optional[UUID] = None
+
+
+class ProjectOut(ProjectBase):
+    id: UUID
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ========== DOCUMENT SCHEMAS ==========
+class DocumentOut(BaseModel):
+    id: UUID
+    name: str
+    file_path: str
+    file_size: Optional[int] = None
+    content_type: Optional[str] = None
+    project_id: UUID
+    created_at: datetime
+
     model_config = ConfigDict(from_attributes=True)
 
 

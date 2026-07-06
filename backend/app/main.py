@@ -6,9 +6,11 @@ from uuid import UUID
 from pathlib import Path
 from typing import List
 
-from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Query
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 
@@ -19,7 +21,7 @@ from .auth import (
     get_current_active_user,
     ACCESS_TOKEN_EXPIRE_MINUTES,
 )
-from .models import User, Client, Task, Finance, MeetingNote
+from .models import User, Client, Task, Finance, MeetingNote, Project, Document
 from .schemas import (
     Token,
     UserOut,
@@ -35,6 +37,10 @@ from .schemas import (
     MeetingNoteCreate,
     MeetingNoteUpdate,
     MeetingNoteOut,
+    ProjectCreate,
+    ProjectUpdate,
+    ProjectOut,
+    DocumentOut,
     DashboardStats,
 )
 from .services.dashboard_stats import build_dashboard_stats
@@ -64,6 +70,16 @@ app.add_middleware(
 # Upload directory
 UPLOAD_DIR = Path("/app/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+import re
+
+
+def safe_filename(name: str | None) -> str:
+    """Nettoie un nom de fichier fourni par l'utilisateur (anti path traversal)."""
+    base = os.path.basename(name or "").strip()
+    base = re.sub(r"[^A-Za-z0-9._-]", "_", base)
+    base = base.lstrip(".") or "file"
+    return base[:200]
 
 
 # Runtime schema patching for environments that do not run migrations.
@@ -447,6 +463,160 @@ async def delete_meeting_note(
     return None
 
 
+# ========== PROJECTS CRUD ==========
+@app.get("/projects", response_model=List[ProjectOut], tags=["Projects"])
+async def get_projects(
+    client_id: Optional[UUID] = Query(default=None),
+    skip: int = 0,
+    limit: int = 200,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Liste les projets, optionnellement filtrés par client."""
+    query = select(Project)
+    if client_id is not None:
+        query = query.where(Project.client_id == client_id)
+    result = await db.execute(query.offset(skip).limit(limit))
+    return result.scalars().all()
+
+
+@app.post("/projects", response_model=ProjectOut, status_code=status.HTTP_201_CREATED, tags=["Projects"])
+async def create_project(
+    project_data: ProjectCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Crée un nouveau projet."""
+    project = Project(**project_data.model_dump())
+    db.add(project)
+    await db.commit()
+    await db.refresh(project)
+    return project
+
+
+@app.put("/projects/{project_id}", response_model=ProjectOut, tags=["Projects"])
+async def update_project(
+    project_id: UUID,
+    project_data: ProjectUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Met à jour un projet."""
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    for key, value in project_data.model_dump(exclude_unset=True).items():
+        setattr(project, key, value)
+    await db.commit()
+    await db.refresh(project)
+    return project
+
+
+@app.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["Projects"])
+async def delete_project(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Supprime un projet et ses documents."""
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    await db.delete(project)
+    await db.commit()
+    return None
+
+
+# ========== DOCUMENTS ==========
+@app.get("/projects/{project_id}/documents", response_model=List[DocumentOut], tags=["Documents"])
+async def get_project_documents(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Liste les documents d'un projet."""
+    result = await db.execute(select(Document).where(Document.project_id == project_id))
+    return result.scalars().all()
+
+
+@app.post("/projects/{project_id}/documents", response_model=DocumentOut, status_code=status.HTTP_201_CREATED, tags=["Documents"])
+async def upload_project_document(
+    project_id: UUID,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Uploade un document et le range dans un projet."""
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    clean = safe_filename(file.filename)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stored_name = f"{timestamp}_{clean}"
+    file_path = UPLOAD_DIR / stored_name
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+    document = Document(
+        name=os.path.basename(file.filename or "") or clean,
+        file_path=str(file_path),
+        file_size=file_path.stat().st_size,
+        content_type=file.content_type,
+        project_id=project_id,
+    )
+    db.add(document)
+    await db.commit()
+    await db.refresh(document)
+    return document
+
+
+@app.get("/documents/{document_id}/download", tags=["Documents"])
+async def download_document(
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Télécharge un document."""
+    result = await db.execute(select(Document).where(Document.id == document_id))
+    document = result.scalar_one_or_none()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not Path(document.file_path).exists():
+        raise HTTPException(status_code=404, detail="File missing on disk")
+    return FileResponse(
+        document.file_path,
+        filename=document.name,
+        media_type=document.content_type or "application/octet-stream",
+    )
+
+
+@app.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["Documents"])
+async def delete_document(
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Supprime un document (base + fichier)."""
+    result = await db.execute(select(Document).where(Document.id == document_id))
+    document = result.scalar_one_or_none()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        Path(document.file_path).unlink(missing_ok=True)
+    except Exception:
+        pass
+    await db.delete(document)
+    await db.commit()
+    return None
+
+
 # ========== UPLOAD ENDPOINT ==========
 @app.post("/upload", tags=["Utils"])
 async def upload_file(
@@ -457,7 +627,7 @@ async def upload_file(
     try:
         # Generate unique filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{timestamp}_{file.filename}"
+        filename = f"{timestamp}_{safe_filename(file.filename)}"
         file_path = UPLOAD_DIR / filename
         
         # Save file
