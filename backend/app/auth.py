@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -33,11 +33,15 @@ if SECRET_KEY in _INSECURE_DEFAULTS:
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "10080"))
 
+# Clé API de service (pour bots/automations type n8n).
+# Si CRM_API_KEY n'est pas défini, cette voie d'auth est désactivée.
+CRM_API_KEY = os.getenv("CRM_API_KEY", "").strip()
+
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# OAuth2 scheme
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
+# OAuth2 scheme (auto_error=False pour laisser passer l'auth par clé API)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token", auto_error=False)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -79,15 +83,31 @@ async def authenticate_user(db: AsyncSession, email: str, password: str) -> Opti
 
 
 async def get_current_user(
-    token: str = Depends(oauth2_scheme),
+    request: Request,
+    token: Optional[str] = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db)
 ) -> User:
-    """Dependency qui récupère le user courant depuis le token."""
+    """Dependency qui récupère le user courant depuis le JWT ou une clé API (X-API-Key)."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+    # Voie 1 : clé API de service (bots/automations, ex: n8n)
+    api_key = request.headers.get("X-API-Key", "")
+    if CRM_API_KEY and api_key and secrets.compare_digest(api_key, CRM_API_KEY):
+        result = await db.execute(
+            select(User).where(User.is_active == True).order_by(User.created_at)  # noqa: E712
+        )
+        service_user = result.scalars().first()
+        if service_user:
+            return service_user
+        raise credentials_exception
+
+    # Voie 2 : JWT classique
+    if not token:
+        raise credentials_exception
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
@@ -96,7 +116,7 @@ async def get_current_user(
         token_data = TokenData(email=email)
     except JWTError:
         raise credentials_exception
-    
+
     user = await get_user_by_email(db, email=token_data.email)
     if user is None:
         raise credentials_exception

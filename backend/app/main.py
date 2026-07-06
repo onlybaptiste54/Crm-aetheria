@@ -21,7 +21,10 @@ from .auth import (
     get_current_active_user,
     ACCESS_TOKEN_EXPIRE_MINUTES,
 )
-from .models import User, Client, Task, Finance, MeetingNote, Project, Document
+from .models import (
+    User, Client, Task, Finance, MeetingNote, Project, Document,
+    TaskStatus, ClientStatus, FinanceType,
+)
 from .schemas import (
     Token,
     UserOut,
@@ -641,6 +644,91 @@ async def upload_file(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+
+# ========== ASSISTANT: AGRÉGAT DU JOUR ==========
+@app.get("/today", tags=["Assistant"])
+async def get_today(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Agrégat 'aujourd'hui' pour l'assistant : tâches en retard/dues,
+    prochaines actions clients, renouvellements d'abonnements à 7 jours."""
+    now = datetime.now()
+    start = datetime(now.year, now.month, now.day)
+    end = start + timedelta(days=1)
+
+    # Tâches non terminées avec échéance passée ou aujourd'hui
+    result = await db.execute(
+        select(Task)
+        .where(Task.status != TaskStatus.DONE, Task.due_date.is_not(None), Task.due_date < end)
+        .order_by(Task.due_date)
+    )
+    due_tasks = result.scalars().all()
+    tasks_overdue = [t for t in due_tasks if t.due_date < start]
+    tasks_due_today = [t for t in due_tasks if t.due_date >= start]
+
+    # Clients (non archivés) avec une prochaine action passée ou aujourd'hui
+    result = await db.execute(
+        select(Client)
+        .where(
+            Client.status != ClientStatus.ARCHIVE,
+            Client.next_action_date.is_not(None),
+            Client.next_action_date < end,
+        )
+        .order_by(Client.next_action_date)
+    )
+    actions = result.scalars().all()
+
+    # Abonnements à renouveler dans les 7 jours
+    result = await db.execute(
+        select(Finance)
+        .where(
+            Finance.type == FinanceType.SUBSCRIPTION,
+            Finance.renewal_date.is_not(None),
+            Finance.renewal_date >= start.date(),
+            Finance.renewal_date <= (start + timedelta(days=7)).date(),
+        )
+        .order_by(Finance.renewal_date)
+    )
+    renewals = result.scalars().all()
+
+    def task_brief(t: Task) -> dict:
+        return {
+            "id": str(t.id),
+            "title": t.title,
+            "status": t.status.value,
+            "priority": t.priority.value,
+            "due_date": t.due_date.isoformat() if t.due_date else None,
+            "client_id": str(t.client_id) if t.client_id else None,
+        }
+
+    def client_brief(c: Client) -> dict:
+        return {
+            "id": str(c.id),
+            "company_name": c.company_name,
+            "status": c.status.value,
+            "pipeline_stage": c.pipeline_stage.value,
+            "next_action_date": c.next_action_date.isoformat() if c.next_action_date else None,
+            "notes": c.notes,
+        }
+
+    return {
+        "date": start.date().isoformat(),
+        "tasks_overdue": [task_brief(t) for t in tasks_overdue],
+        "tasks_due_today": [task_brief(t) for t in tasks_due_today],
+        "client_next_actions": [client_brief(c) for c in actions],
+        "subscription_renewals_7d": [
+            {
+                "id": str(f.id),
+                "name": f.name,
+                "amount": float(f.amount),
+                "currency": f.currency,
+                "renewal_date": f.renewal_date.isoformat() if f.renewal_date else None,
+            }
+            for f in renewals
+        ],
+    }
 
 
 # ========== DASHBOARD STATS ==========
