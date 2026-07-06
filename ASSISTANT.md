@@ -28,18 +28,36 @@ Telegram Trigger
 ```
 
 Un seul agent, deux sources d'outils (CRM via MCP, Gmail). L'agent lit les
-**descriptions** des outils MCP pour choisir — donc les descriptions dans le
-serveur MCP font tout le travail de routage (plus besoin de classifieur/switch).
+**descriptions** des outils MCP pour choisir — donc les descriptions font tout
+le travail de routage (plus besoin de classifieur/switch).
+
+Nœuds n8n natifs utilisés : **MCP Server Trigger** (n8n héberge le serveur MCP
+CRM) et **MCP Client Tool** (l'agent consomme cet endpoint). Le même endpoint
+sert aussi à Claude Desktop.
 
 ---
 
-## 1. Le serveur MCP CRM (la seule brique à coder)
+## 1. Le serveur MCP CRM — 2 façons de l'héberger
 
-Petit service à côté du backend : il **enveloppe l'API REST existante** (auth
-`X-API-Key`) et l'expose en outils MCP. Transport **HTTP/SSE** pour être
-joignable à la fois par n8n ET par Claude Desktop (connecteur MCP distant).
-Nouveau conteneur dans le docker-compose, derrière Traefik
-(ex : `mcp-crm.agenceaetheria.com`), protégé par un secret.
+**Option A — n8n MCP Server Trigger (recommandé, ZÉRO code)** ⭐
+n8n peut *être* le serveur MCP. Workflow dédié : un nœud **MCP Server Trigger**,
+et dessous un **HTTP Request** par outil (vers l'API CRM, auth `X-API-Key`).
+n8n publie automatiquement un **endpoint MCP** que consomment l'agent n8n
+(via MCP Client Tool) ET Claude Desktop (connecteur MCP distant).
+- ✅ Aucun conteneur custom, tout visuel, la nouvelle voie n8n.
+- ⚠️ La logique des outils vit dans n8n (pas versionnée dans le repo git) ;
+  sécuriser l'URL de l'endpoint (secret + Traefik).
+
+**Option B — serveur MCP codé (conteneur séparé)**
+Un petit service qui enveloppe l'API REST, transport HTTP/SSE, derrière Traefik
+(ex : `mcp-crm.agenceaetheria.com`).
+- ✅ Versionné, testable, portable hors n8n.
+- ⚠️ Un conteneur de plus à écrire et opérer.
+
+**Reco : commence par A.** Tu passes à B seulement si tu veux les outils
+versionnés/testés indépendamment de n8n. Dans les deux cas, le kill-switch
+d'écriture reste **dans l'API CRM** (voir plus bas) — donc valable quelle que
+soit l'option.
 
 Outils à exposer (chacun = 1 appel à l'API déjà en place) :
 
@@ -146,10 +164,12 @@ bureau, sans rien recâbler. Les outils sont définis une fois, consommés parto
 1. **Bot Telegram** : @BotFather → `/newbot` → token. Récupère ton chat.id
    (envoie un message au bot, lis-le via l'API getUpdates ou un nœud n8n).
 2. **`CRM_API_KEY`** dans `.env`/`.env.prod` du CRM (déjà supporté backend).
-3. **Serveur MCP CRM** : le construire (wrapper API), le déployer (conteneur +
-   Traefik + secret), `ASSISTANT_WRITE_ENABLED=false` au départ.
-4. **n8n** : Telegram Trigger → IF (chat.id) → AI Agent (Sonnet, prompt ci-dessus,
-   Postgres Chat Memory, MCP Client Tool → serveur MCP CRM, + Gmail) → Telegram Send.
+3. **Serveur MCP CRM (option A)** : workflow n8n avec **MCP Server Trigger** +
+   un **HTTP Request** par outil (vers l'API, header `X-API-Key`). Sécuriser
+   l'URL de l'endpoint. Mettre `ASSISTANT_WRITE_ENABLED=false` côté CRM au départ.
+4. **n8n (agent)** : Telegram Trigger → IF (chat.id) → AI Agent (Sonnet, prompt
+   ci-dessus, Postgres Chat Memory, **MCP Client Tool** → endpoint du §3, + Gmail)
+   → Telegram Send.
 5. Tester en **lecture** ("fais le point", "mes tâches", "mails de X").
 6. Passer `ASSISTANT_WRITE_ENABLED=true` → tester créations avec confirmation.
 7. Brancher le **même serveur MCP dans Claude Desktop** (bonus bureau).
