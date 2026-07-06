@@ -1,171 +1,165 @@
-# Assistant IA Aetheria — n8n + Discord (architecture routeur d'intention)
+# Assistant IA Aetheria — Aether
 
-Un message Discord ne part PAS vers un gros agent fourre-tout à 9 outils.
-Il passe d'abord par un **classifieur d'intention** (modèle léger, pas cher),
-puis un **Switch** l'envoie vers la **branche spécialisée** : chaque branche a
-son mini-agent, son mini-prompt et 2-4 outils max. Workflows courts, agents
-précis, coûts maîtrisés.
+Assistant exécutif de Baptiste (agence Aetheria). Un seul **orchestrateur** IA,
+ses capacités exposées via **MCP** (réutilisables partout), mémoire séparée.
+Interface : **Telegram** (trigger natif n8n). Réutilisable dans Claude Desktop.
+
+## Les 3 couches (à ne jamais confondre)
 
 ```
-Discord Trigger
-   └─ IF (author.id == TON ID)          ← sécurité, non négociable
-        └─ Text Classifier (Haiku)      ← détecte l'intention
-             └─ Switch
-                  ├─ brief_du_jour  → HTTP /today → LLM (mise en forme) → Discord
-                  ├─ taches         → Agent Tâches   (3 outils)         → Discord
-                  ├─ crm_clients    → Agent Clients  (3 outils)         → Discord
-                  ├─ emails         → Agent Emails   (Gmail + 1 outil)  → Discord
-                  └─ autre          → Agent Général  (0-1 outil)        → Discord
+🧠 CERVEAU      = l'orchestrateur LLM (Claude Sonnet) — il raisonne, il enchaîne
+💾 MÉMOIRE      = Postgres Chat Memory (court terme) + le CRM (long terme)
+🖐️ MAINS/YEUX   = MCP : serveur MCP CRM + Gmail — les outils qu'il peut appeler
 ```
 
-- **Classifieur** : nœud n8n "Text Classifier" avec `claude-haiku-4-5` (rapide, ~centimes).
-- **Agents de branche** : `claude-sonnet-5`.
-- **Mémoire de conversation** : nœud "Postgres Chat Memory" sur CHAQUE agent,
-  avec **la même session key** (`{{ $json.author.id }}`) → la mémoire est
-  partagée entre les branches, la conversation reste fluide même si deux
-  messages consécutifs partent dans des branches différentes.
-- **Mémoire longue** : le CRM lui-même (notes clients, tâches). Pas de base parallèle.
-- **Auth CRM** : header `X-API-Key` (env `CRM_API_KEY` du backend). URL de base :
-  `https://api-crm.agenceaetheria.com` (prod) / `http://backend:8000` (dev même réseau Docker).
+MCP n'a PAS de mémoire (sans état, par design) et n'est PAS le cerveau : c'est
+juste le catalogue d'outils. La mémoire et le raisonnement vivent ailleurs.
+
+## Schéma
+
+```
+Telegram Trigger
+  └─ IF (chat.id == TON ID)                 ← sécurité, non négociable
+       └─ AI Agent "Aether" (Sonnet)
+            ├─ Memory : Postgres Chat Memory (session = chat.id)
+            ├─ Tool   : MCP Client → serveur MCP CRM   (tâches, clients, projets, /today)
+            └─ Tool   : Gmail (MCP Gmail OU nœud n8n natif)
+       └─ Telegram Send Message
+```
+
+Un seul agent, deux sources d'outils (CRM via MCP, Gmail). L'agent lit les
+**descriptions** des outils MCP pour choisir — donc les descriptions dans le
+serveur MCP font tout le travail de routage (plus besoin de classifieur/switch).
 
 ---
 
-## 1. Le classifieur (Text Classifier)
+## 1. Le serveur MCP CRM (la seule brique à coder)
 
-Les **descriptions de catégories** sont ce que lit le modèle : elles font tout le travail.
+Petit service à côté du backend : il **enveloppe l'API REST existante** (auth
+`X-API-Key`) et l'expose en outils MCP. Transport **HTTP/SSE** pour être
+joignable à la fois par n8n ET par Claude Desktop (connecteur MCP distant).
+Nouveau conteneur dans le docker-compose, derrière Traefik
+(ex : `mcp-crm.agenceaetheria.com`), protégé par un secret.
 
-| Catégorie | Description à mettre dans n8n |
-|---|---|
-| `brief_du_jour` | L'utilisateur demande le point du jour, ses urgences, son programme, ses RDV du jour, "quoi de neuf", "fais le point". |
-| `taches` | Créer, modifier, lister, terminer ou reporter des tâches ; questions d'échéances ou de kanban. Ex : "crée une tâche", "c'est quoi mes tâches en retard", "passe X en terminé". |
-| `crm_clients` | Clients et prospects : lister, créer, mettre à jour, pipeline, prochaine action/RDV d'un client, ajouter une info/note sur un client. Ex : "ajoute le prospect X", "où en est le client Y", "note que Z préfère le mardi". |
-| `emails` | Boîte mail : chercher, lire, résumer des emails ; rédiger un brouillon ou envoyer un email. Ex : "j'ai reçu quoi de X", "résume les mails d'aujourd'hui", "écris un mail à Y pour...", "réponds-lui que...". |
-| `autre` | Tout le reste : discussion générale, questions hors CRM/emails. (Catégorie fallback.) |
+Outils à exposer (chacun = 1 appel à l'API déjà en place) :
 
-Réglage : une seule catégorie par message (v1). Si un message mélange deux
-intentions, le classifieur prend la dominante et l'agent signale le reste
-("je t'ai créé la tâche ; redis-moi pour les mails").
+| Outil MCP | API sous-jacente | Rôle |
+|---|---|---|
+| `get_today` | GET `/today` | Point du jour : retards, dus aujourd'hui, prochaines actions clients, renouvellements 7j. |
+| `list_tasks` | GET `/tasks` | Lister les tâches (id, titre, statut, priorité, échéance, client). |
+| `create_task` | POST `/tasks` | Créer une tâche (title requis ; priority, due_date, status, client_id, description). |
+| `update_task` | PUT `/tasks/{id}` | Modifier une tâche (statut, échéance, priorité...). |
+| `list_clients` | GET `/clients` | Lister clients/prospects (statut, pipeline, next_action, notes, contact, email). |
+| `create_client` | POST `/clients` | Créer un client/prospect (company_name requis + champs optionnels). |
+| `update_client` | PUT `/clients/{id}` | Mettre à jour : notes (ajouter, pas écraser), next_action_date, pipeline. |
+| `list_projects` | GET `/projects` | Lister les projets (filtre `client_id` possible). |
+| `list_meeting_notes` | GET `/meeting-notes` | Lister les comptes-rendus. |
+| `search_crm` | (à ajouter) GET `/search?q=` | Recherche transverse clients+tâches+notes+projets (phase 2). |
 
----
+Chaque outil a une **description claire** (une phrase + les params) : c'est ce
+que lit l'agent pour décider. Les descriptions comptent plus que le code.
 
-## 2. Socle commun de prompt (à coller EN TÊTE de chaque agent)
+**Sécurité serveur (non délégable au LLM) :** variable `ASSISTANT_WRITE_ENABLED`
+sur le CRM/serveur MCP. Tant qu'elle est à `false`, les outils d'écriture
+(`create_*`, `update_*`) refusent — même si l'agent essaie. Kill-switch réel :
+on démarre à `false` (lecture seule), on passe à `true` quand la lecture est
+rodée.
+
+## 2. Gmail
+
+Deux options, au choix :
+- **Serveur MCP Gmail** (il en existe des prêts à l'emploi) → cohérent, tout en MCP.
+- **Nœud Gmail n8n natif** en tool de l'agent → plus simple à câbler dans n8n (OAuth intégré).
+
+Recommandation : **nœud n8n natif au début** (OAuth géré par n8n, moins de setup),
+on bascule en MCP Gmail seulement si tu veux les emails aussi dans Claude Desktop.
+
+Capacités : chercher/lire, créer un **brouillon** (défaut), **envoyer**
+(uniquement sur demande explicite + confirmation du mail complet). Adresse
+jamais devinée : prise dans le CRM (`list_clients`) ou dans le fil.
+
+## 3. Mémoire
+
+- **Court terme (conversation)** : nœud **Postgres Chat Memory**, session key =
+  `{{ $json.message.chat.id }}`, sur le Postgres du serveur (crée sa table seul).
+  → l'agent se souvient du fil, y compris des **actions en attente de
+  confirmation** (voir §4).
+- **Long terme (faits durables)** : **le CRM**. Un fait sur un client → notes du
+  client (ligne datée ajoutée à la fin, jamais d'écrasement). Une action → une tâche.
+  Pas de base parallèle qui diverge : sa mémoire = ta base, visible dans l'UI.
+
+## 4. Confirmations (c'est un problème d'ÉTAT, pas de prompt)
+
+"Je crée la tâche X, ok ?" puis toi "oui" au message suivant → l'action proposée
+doit persister dans la mémoire de conversation entre les deux tours. L'agent :
+1. décrit l'action précise, la garde en tête (mémoire), demande confirmation ;
+2. au "oui", exécute **exactement** l'action mémorisée ; une confirmation = une action ;
+3. si tu changes de sujet entre-temps, l'action en attente est abandonnée.
+
+## 5. Prompt de l'orchestrateur (System Message)
 
 ```
-Tu es Aether, l'assistant de Baptiste (agence Aetheria), sur Discord.
+Tu es Aether, l'assistant exécutif de Baptiste, fondateur de l'agence Aetheria.
+Tu es branché sur son CRM (clients, prospects, tâches, projets, comptes-rendus,
+finances) via des outils, et sur sa boîte Gmail. Tu lui parles sur Telegram.
+
+Capacités : comprendre des demandes multi-étapes, choisir les bons outils,
+enchaîner plusieurs actions, et répondre court.
+
 Règles absolues :
-1. Ne réponds jamais de mémoire sur les données : appelle toujours un outil,
-   seule l'API fait foi.
-2. Avant toute création/modification : reformule l'action en une phrase et
-   attends un "oui" explicite. Une confirmation = une action.
-3. Ne devine jamais un ID : lis d'abord via un outil de lecture.
-4. Si un outil échoue, dis-le simplement, n'invente jamais un résultat.
-5. Dates en français (JJ/MM), fuseau Europe/Paris. "demain"/"lundi" →
+1. Ne réponds JAMAIS de mémoire sur CRM/tâches/emails : appelle toujours un
+   outil, seule l'API fait foi. Pour un point du jour : get_today d'abord.
+2. Avant toute création / modification / envoi : reformule l'action en une
+   phrase et attends un "oui" explicite. Une confirmation = une seule action.
+3. Ne devine jamais un ID, une date ni une adresse email : récupère-les via un
+   outil de lecture, ou demande.
+4. Si une demande contient plusieurs actions, traite-les dans l'ordre logique
+   et confirme celles qui écrivent.
+5. Mémoire longue = le CRM : un fait durable sur un client → propose de
+   l'ajouter à ses notes (ajouter une ligne datée, ne jamais écraser).
+   Une action à faire → propose une tâche.
+6. Emails : brouillon par défaut ; envoi direct seulement si Baptiste dit
+   explicitement "envoie", après lui avoir montré le mail complet.
+7. Si un outil échoue, dis-le simplement, n'invente jamais un résultat.
+8. Dates en français (JJ/MM), fuseau Europe/Paris ; "demain"/"lundi" →
    convertis en date exacte et confirme-la avant d'écrire.
-6. Style Discord : court, listes à puces, pas de pavés. Tutoie Baptiste.
-7. Tu ne sers que Baptiste. Hors périmètre → refuse poliment.
+9. Style Telegram : court, listes à puces, pas de pavés. Tutoie Baptiste.
+10. Tu ne sers que Baptiste. Hors périmètre (CRM, emails, orga) → refuse poliment.
 ```
 
-## 3. Les branches
+## 6. Réutilisation (l'intérêt du MCP)
 
-### Branche `brief_du_jour` (pas d'agent — la plus simple)
-1. **HTTP Request** : GET `/today` (header X-API-Key)
-2. **LLM Chain** (Sonnet) avec pour instruction :
-   ```
-   Transforme ce JSON en point du jour Discord : max 10 lignes,
-   ⚠️ pour le retard, urgences d'abord, dates JJ/MM, ton direct, tutoiement.
-   Si tout est vide : "Rien d'urgent aujourd'hui" + une suggestion utile.
-   ```
-3. **Discord** : envoi.
+Le **même serveur MCP CRM** se branche aussi dans **Claude Desktop** (Réglages →
+Connecteurs → serveur MCP distant + le secret). Tu obtiens le même assistant au
+bureau, sans rien recâbler. Les outils sont définis une fois, consommés partout.
 
-### Branche `taches` — Agent Tâches
-Prompt spécifique (après le socle) :
-```
-Ton domaine : les tâches (kanban Backlog/Todo/In Progress/Validation/Done).
-Pour lier une tâche à un client, retrouve son client_id via find_clients.
-Une tâche a : title, priority (Low/Medium/High), due_date, status, client_id.
-```
-| Outil | Route | Description n8n |
-|---|---|---|
-| `list_tasks` | GET `/tasks` | Liste toutes les tâches avec id, titre, statut, priorité, échéance, client_id. |
-| `create_task` | POST `/tasks` | Crée une tâche. Body JSON : title requis ; priority, due_date (ISO), status, client_id, description optionnels. Confirmer avant d'appeler. |
-| `update_task` | PUT `/tasks/{id}` | Modifie une tâche (statut, échéance, priorité...). ID obtenu via list_tasks. |
-| `find_clients` | GET `/clients` | Pour retrouver le client_id d'un client par son nom. |
+## 7. Sécurité (récap)
 
-### Branche `crm_clients` — Agent Clients
-Prompt spécifique :
-```
-Ton domaine : clients et prospects (status Prospect/Client/Archive,
-pipeline New→Contacted→Meeting Booked→Dev→Signed→Delivered).
-Mémoire longue : un fait durable sur un client → propose de l'ajouter à ses
-notes ; récupère les notes actuelles et AJOUTE une ligne datée à la fin,
-n'écrase jamais. Un RDV/relance → mets à jour next_action_date.
-Une action à faire → propose plutôt une tâche (branche tâches).
-```
-| Outil | Route | Description n8n |
-|---|---|---|
-| `list_clients` | GET `/clients` | Liste clients et prospects : id, company_name, status, pipeline_stage, next_action_date, notes, contact. |
-| `create_client` | POST `/clients` | Crée un client/prospect. Body : company_name requis ; status, contact_person, email, phone, sector, pipeline_stage, priority, next_action_date, notes optionnels. Confirmer avant. |
-| `update_client` | PUT `/clients/{id}` | Met à jour un client : notes (ajouter, pas écraser), next_action_date, pipeline_stage... ID via list_clients. |
+- Telegram : nœud **IF** sur ton chat.id — l'agent ne répond qu'à toi.
+- Auth CRM : `X-API-Key` (jamais en dur : credential n8n / secret MCP).
+- Écritures : `ASSISTANT_WRITE_ENABLED` côté serveur (démarrer en lecture seule).
+- Emails : brouillon par défaut, adresse jamais devinée, envoi sur confirmation.
+- Traçabilité : logs d'exécution n8n (+ Langfuse auto-hébergé si ça se complexifie).
 
-### Branche `emails` — Agent Emails
-Prompt spécifique :
-```
-Ton domaine : la boîte Gmail de Baptiste (lecture, rédaction, envoi).
-Croise avec le CRM : expéditeur connu → dis de quel client il s'agit et où
-il en est (find_clients).
+## 8. Setup (ordre conseillé)
 
-Rédaction d'emails :
-- Par défaut tu crées un BROUILLON (gmail_create_draft), jamais un envoi.
-- Tu n'envoies directement (gmail_send) QUE si Baptiste dit explicitement
-  "envoie" / "envoie-le direct". Avant l'envoi : montre le mail complet
-  (destinataire, objet, corps) et attends un "oui". Une confirmation = un envoi.
-- Ne devine JAMAIS une adresse : prends-la dans le CRM (find_clients) ou dans
-  le fil d'emails. Adresse introuvable → demande-la.
-- Style des mails : professionnel, direct, signé "Baptiste — Aetheria".
-  Adapte le ton au contexte du fil. Pas de blabla corporate.
-- Réponse à un fil existant → reste dans le fil (reply), n'ouvre pas un
-  nouveau thread.
-```
-| Outil | Type | Description n8n |
-|---|---|---|
-| `gmail_search` | nœud Gmail Tool — opération "Get Many" | Chercher et lire des emails (par expéditeur, sujet, date, mots-clés). |
-| `gmail_create_draft` | nœud Gmail Tool — opération "Create Draft" | Créer un brouillon (to, subject, message). Action par défaut pour toute rédaction. |
-| `gmail_send` | nœud Gmail Tool — opération "Send" | Envoyer un email. UNIQUEMENT sur demande explicite et après confirmation du mail complet. |
-| `find_clients` | GET `/clients` | Croiser un expéditeur/destinataire avec le CRM (récupérer l'adresse email d'un client). |
+1. **Bot Telegram** : @BotFather → `/newbot` → token. Récupère ton chat.id
+   (envoie un message au bot, lis-le via l'API getUpdates ou un nœud n8n).
+2. **`CRM_API_KEY`** dans `.env`/`.env.prod` du CRM (déjà supporté backend).
+3. **Serveur MCP CRM** : le construire (wrapper API), le déployer (conteneur +
+   Traefik + secret), `ASSISTANT_WRITE_ENABLED=false` au départ.
+4. **n8n** : Telegram Trigger → IF (chat.id) → AI Agent (Sonnet, prompt ci-dessus,
+   Postgres Chat Memory, MCP Client Tool → serveur MCP CRM, + Gmail) → Telegram Send.
+5. Tester en **lecture** ("fais le point", "mes tâches", "mails de X").
+6. Passer `ASSISTANT_WRITE_ENABLED=true` → tester créations avec confirmation.
+7. Brancher le **même serveur MCP dans Claude Desktop** (bonus bureau).
 
-OAuth : compte `agenceaetheria@gmail.com`, credential Gmail unique partagé
-par les trois nœuds Gmail Tool.
+## 9. Phase 2 (quand le besoin est réel)
 
-### Branche `autre` — Agent Général
-Socle commun seul, sans outil (ou `get_today` en lecture si utile).
-Répond, discute, et si la demande relève en fait du CRM/emails, invite à
-reformuler ("demande-moi direct : crée une tâche...").
-
----
-
-## 4. Mémoire
-
-- **Postgres Chat Memory** sur chaque agent, session key identique :
-  `{{ $json.author.id }}`. Credentials vers le Postgres du serveur
-  (n8n crée sa table tout seul). → conversation partagée entre branches.
-- **Mémoire longue = le CRM** : notes clients datées + tâches. Visible et
-  corrigeable dans l'UI, pas de base parallèle qui diverge.
-
-## 5. Setup
-
-- `CRM_API_KEY` : dans le `.env`/`.env.prod` du CRM (déjà supporté backend)
-  ET en credential n8n (jamais en dur dans les nœuds).
-- Bot Discord : discord.com/developers → application → bot → token dans le
-  credential Discord n8n → inviter le bot sur ton serveur (lecture/écriture messages).
-- Récupérer ton ID Discord (mode développeur → clic droit → copier l'ID)
-  pour le nœud IF.
-
-## 6. Phase 2 (quand le besoin est réel)
-
-- **RAG pgvector** sur comptes-rendus + emails archivés pour les questions
-  "historiques" (image `pgvector/pgvector:pg16` en dev, `CREATE EXTENSION
-  vector` sur le Postgres serveur en prod) — nouvelle branche `historique`
-  dans le Switch.
-- **Brief automatique 8h** : workflow séparé Schedule Trigger → réutilise la
-  branche brief → Discord. Aucune IA de plus à câbler.
-- Multi-intentions par message (classifieur multi-label) si le besoin se sent.
+- **RAG pgvector** sur comptes-rendus + emails archivés (questions historiques) →
+  nouvel outil MCP `search_semantic`. Image `pgvector/pgvector:pg16` en dev,
+  `CREATE EXTENSION vector` en prod.
+- **Brief auto 8h** : workflow n8n séparé, Schedule Trigger → get_today →
+  mise en forme → Telegram. Zéro IA de plus.
+- **Endpoint `/search`** côté CRM (plein-texte simple) avant de sortir les vecteurs :
+  souvent suffisant.
