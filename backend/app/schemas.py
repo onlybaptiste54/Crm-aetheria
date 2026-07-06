@@ -1,5 +1,5 @@
 """Pydantic Schemas V2 - Tous les schémas regroupés ici."""
-from pydantic import BaseModel, EmailStr, ConfigDict
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime, date
 from uuid import UUID
 from typing import Optional
@@ -8,7 +8,9 @@ from .models import ClientStatus, PipelineStage, Priority, CompanySize, TaskStat
 
 # ========== USER SCHEMAS ==========
 class UserBase(BaseModel):
-    email: EmailStr
+    # str plutôt que EmailStr : les domaines internes (.local) sont valides
+    # pour un outil interne mais rejetés par le validateur d'email strict.
+    email: str
 
 
 class UserCreate(UserBase):
